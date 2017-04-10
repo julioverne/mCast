@@ -2,6 +2,22 @@
 #import <objc/runtime.h>
 #include <sys/sysctl.h>
 #import <substrate.h>
+#import <CommonCrypto/CommonCrypto.h>
+
+
+@implementation NSString (mCast)
+- (NSString*)md5
+{
+    const char* str = [self UTF8String];
+    unsigned char result[CC_MD5_DIGEST_LENGTH];
+    CC_MD5(str, strlen(str), result);
+    NSMutableString *ret = [NSMutableString stringWithCapacity:CC_MD5_DIGEST_LENGTH*2];
+    for(int i = 0; i<CC_MD5_DIGEST_LENGTH; i++) {
+		[ret appendFormat:@"%02x",result[i]];
+    }
+    return ret;
+}
+@end
 
 
 enum {
@@ -25,16 +41,15 @@ static const char * reqCONNECT ="\x00\x00\x00\x58\x08\x00\x12\x08\x73\x65\x6E\x6
 static const char * reqLAUNCH ="\x00\x00\x00\x73\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x0A\x72\x65\x63\x65\x69\x76\x65\x72\x2D\x30\x22\x23\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x72\x65\x63\x65\x69\x76\x65\x72\x28\x00\x32\x32""{\"type\":\"LAUNCH\",\"appId\":\"CC1AD845\",\"requestId\":0}";
 static const char * reqGET_STATUS ="\x00\x00\x00\x64\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x0A\x72\x65\x63\x65\x69\x76\x65\x72\x2D\x30\x22\x23\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x72\x65\x63\x65\x69\x76\x65\x72\x28\x00\x32\x23""{\"type\":\"GET_STATUS\",\"requestId\":0}";
 
-static NSString* kSessionId;
 
 
-static void sendMessage(SSLContextRef context, const char* message, int messageLen, BOOL waitResponse)
+static void sendMessage(SSLContextRef context, const char* message, int messageLen, BOOL waitResponse, NSString** session)
 {
-	OSStatus result;
-	if(message==reqLAUNCH) {
-		kSessionId = nil;
-	}	
+	if(!context) {
+		return;
+	}
 	size_t processed = 0;
+	OSStatus result;
 	result = SSLWrite(context, message, messageLen, &processed);
 	if(result) {
 		printf("Error SSLWrite\n");
@@ -56,7 +71,7 @@ static void sendMessage(SSLContextRef context, const char* message, int messageL
 			if(match_filedowncount) {
 				NSRange  Range_filedowncount = [match_filedowncount rangeAtIndex:1];
 				if ([receivedData rangeOfString:@"CC1AD845"].location != NSNotFound) {
-					kSessionId = [[receivedData substringWithRange:Range_filedowncount] copy];
+					*session = [[receivedData substringWithRange:Range_filedowncount] copy];
 				}				
 			}
 		}
@@ -114,7 +129,7 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 		return 0;
 	}
 	
-	int mediaType = 0;
+	int mediaType = 1;
 	if(id mediaTypeID = metadata[@"mediaType"]) {
 		mediaType = [mediaTypeID intValue];
 	}
@@ -130,31 +145,30 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 	}
 	
 	SSLContextRef context;
-	//if(context == NULL) {
-		startConnection(ipCastSt, &context);
-	//}
-	
+	startConnection(ipCastSt, &context);	
 	if(!context) {
 		return 0;
 	}
 	
-	sendMessage(context, reqCONNECT, 92, NO);	
-	sendMessage(context, reqLAUNCH, 119, NO);
+	sendMessage(context, reqCONNECT, 92, NO, NULL);	
+	sendMessage(context, reqLAUNCH, 119, NO, NULL);
 	
-	kSessionId = nil;
+	NSString* kSessionId = nil;
 	int trying = 0;
 	do {
-		sendMessage(context, reqCONNECT, 92, YES);
+		sendMessage(context, reqCONNECT, 92, YES, &kSessionId);
 		trying++;
 	} while(trying<10 && kSessionId == nil);
 
-	
+	if(!kSessionId) {
+		return 0;
+	}
 	NSMutableData *data = [NSMutableData data];
 	[data appendBytes:"\x00\x00\x00\x72\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x24" length:18];
 	[data appendBytes:kSessionId.UTF8String length:36];
 	[data appendBytes:"\x22\x28\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x74\x70\x2E\x63\x6F\x6E\x6E\x65\x63\x74\x69\x6F\x6E\x28\x00\x32\x12" length:46];
 	[data appendBytes:"{\"type\":\"CONNECT\"}" length:18];
-	sendMessage(context, (const char*)data.bytes, data.length, NO);
+	sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 	
 	
 	const char* baseURL =  (const char*)(malloc(83)); // max length 82
@@ -206,13 +220,12 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 	[data appendBytes:"\",\"width\":600,\"height\":600}],\"metadataType\":0},\"contentId\":\"" length:60];
 	[data appendBytes:baseURL length:82];
 	[data appendBytes:"\",\"streamType\":\"BUFFERED\",\"contentType\":\"" length:41];
-	[data appendBytes:mediaType==0?"audio/xxx":mediaType==1?"video/xxx":"image/xxx" length:9];
+	[data appendBytes:mediaType==0?"image/xxx":mediaType==1?"audio/xxx":"video/xxx" length:9];
 	[data appendBytes:"\"},\"autoplay\":1,\"currentTime\":0,\"requestId\":921489134}" length:54];
 	
-	sendMessage(context, (const char*)data.bytes, data.length, NO);
+	sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 	
 	SSLClose(context);
-	context = NULL;
 	} @catch (NSException* e) {
 		
 	}
@@ -232,20 +245,18 @@ static void actionChromecast(NSString* ipCastSt, NSDictionary* info)
 	}
 	
 	SSLContextRef context;
-	//if(context == NULL) {
-		startConnection(ipCastSt, &context);
-	//}
+	startConnection(ipCastSt, &context);
 	
 	if(!context) {
 		return;
 	}
 	
-	sendMessage(context, reqCONNECT, 92, NO);
+	sendMessage(context, reqCONNECT, 92, NO, NULL);
 	
-	kSessionId = nil;
+	NSString* kSessionId = nil;
 	int trying = 0;
 	do {
-		sendMessage(context, reqGET_STATUS, 104, YES);
+		sendMessage(context, reqGET_STATUS, 104, YES, &kSessionId);
 		trying++;
 	} while(trying<10 && kSessionId == nil);
 	
@@ -255,14 +266,14 @@ static void actionChromecast(NSString* ipCastSt, NSDictionary* info)
 		[data appendBytes:kSessionId.UTF8String length:36];
 		[data appendBytes:"\x22\x28\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x74\x70\x2E\x63\x6F\x6E\x6E\x65\x63\x74\x69\x6F\x6E\x28\x00\x32\x12" length:46];
 		[data appendBytes:"{\"type\":\"CONNECT\"}" length:18];
-		sendMessage(context, (const char*)data.bytes, data.length, NO);
+		sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 		if(actionType == closeConnection) {			
 			data = [NSMutableData data];
 			[data appendBytes:"\x00\x00\x00\x70\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x24" length:18];
 			[data appendBytes:kSessionId.UTF8String length:36];
 			[data appendBytes:"\x22\x28\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x74\x70\x2E\x63\x6F\x6E\x6E\x65\x63\x74\x69\x6F\x6E\x28\x00\x32\x10" length:46];
 			[data appendBytes:"{\"type\":\"CLOSE\"}" length:16];
-			sendMessage(context, (const char*)data.bytes, data.length, NO);
+			sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 		} else if(actionType == connectConnection) {
 			
 		} else if(actionType == pauseMedia) {
@@ -271,26 +282,25 @@ static void actionChromecast(NSString* ipCastSt, NSDictionary* info)
 			[data appendBytes:kSessionId.UTF8String length:36];
 			[data appendBytes:"\x22\x20\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x6D\x65\x64\x69\x61\x28\x00\x32\x33" length:38];
 			[data appendBytes:"{\"type\":\"PAUSE\", \"mediaSessionId\":1, \"requestId\":1}" length:51];
-			sendMessage(context, (const char*)data.bytes, data.length, NO);
+			sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 		} else if(actionType == playMedia) {
 			data = [NSMutableData data];
 			[data appendBytes:"\x00\x00\x00\x8A\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x24" length:18];
 			[data appendBytes:kSessionId.UTF8String length:36];
 			[data appendBytes:"\x22\x20\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x6D\x65\x64\x69\x61\x28\x00\x32\x32" length:38];
 			[data appendBytes:"{\"type\":\"PLAY\", \"mediaSessionId\":1, \"requestId\":1}" length:50];
-			sendMessage(context, (const char*)data.bytes, data.length, NO);
+			sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 		} else if(actionType == stopMedia) {
 			data = [NSMutableData data];
 			[data appendBytes:"\x00\x00\x00\x8A\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x24" length:18];
 			[data appendBytes:kSessionId.UTF8String length:36];
 			[data appendBytes:"\x22\x20\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x6D\x65\x64\x69\x61\x28\x00\x32\x32" length:38];
 			[data appendBytes:"{\"type\":\"STOP\", \"mediaSessionId\":1, \"requestId\":1}" length:50];
-			sendMessage(context, (const char*)data.bytes, data.length, NO);
+			sendMessage(context, (const char*)data.bytes, data.length, NO, NULL);
 		}
 	}
 	
 	SSLClose(context);
-	context = NULL;
 	} @catch (NSException* e) {
 	}
 }
@@ -649,21 +659,27 @@ static BOOL isPortOpen(const char* ip, int port)
 						[hud setText:@"Starting..."];
 					});
 					
-					NSString* nowPlayingSt = [nowPlayingInfo[@"mediaURL"] path];
-					
-					NSString* artURLPath = [nowPlayingInfo[@"artURL"] path];
-					
 					NSString* myLocalIP = [[[ScanLAN alloc] init] localIPAddress];
 					
-					NSString* mediaURL = [NSString stringWithFormat:@"http://%@:86/Music/%@/%@", myLocalIP, [[nowPlayingSt stringByDeletingLastPathComponent] lastPathComponent], [nowPlayingSt lastPathComponent]];
+					NSMutableDictionary* cachedUrls = [[[NSDictionary alloc] initWithContentsOfFile:@"/private/var/mobile/Media/mCastCache.plist"]?:@{} mutableCopy];
 					
-					NSString* artURL = [NSString stringWithFormat:@"http://%@:86%@", myLocalIP, artURLPath];
+					NSString* nowPlayingSt = [nowPlayingInfo[@"mediaURL"] absoluteString];
+					NSString* urlMediaMD5 = [[NSString stringWithFormat:@"%@", nowPlayingSt] md5];
+					cachedUrls[urlMediaMD5] = nowPlayingSt;
+					NSString* mediaURL = [NSString stringWithFormat:@"http://%@:86/%@", myLocalIP, urlMediaMD5];
+					
+					NSString* artURLPath = [nowPlayingInfo[@"artURL"] absoluteString];
+					NSString* urlArtMD5 = [[NSString stringWithFormat:@"%@", artURLPath] md5];
+					cachedUrls[urlArtMD5] = artURLPath;
+					NSString* artURL = [NSString stringWithFormat:@"http://%@:86/%@", myLocalIP, urlArtMD5];
+					
+					[cachedUrls writeToFile:@"/private/var/mobile/Media/mCastCache.plist" atomically:YES];
 					
 					NSString* subtitleSt = [[nowPlayingInfo[@"artistName"]?:@"" stringByAppendingString:@" – "]stringByAppendingString:nowPlayingInfo[@"albumName"]?:@""];
 					
 					startChromecastMedia(cachedDevice[@"ip"], @{
 						@"mediaURL":mediaURL,
-						@"mediaType": @(0),
+						@"mediaType": nowPlayingInfo[@"mediaType"]?:@(1),
 						@"artURL": artURL,
 						@"titleMedia": nowPlayingInfo[@"title"]?:@"",
 						@"subtitleMedia": subtitleSt.length>5?subtitleSt:@"",
@@ -737,16 +753,16 @@ static BOOL isPortOpen(const char* ip, int port)
 @property(strong, nonatomic) NSObject* artworkCatalogBackingFileURL;
 @property(strong, nonatomic) NSObject* albumName;
 @property(strong, nonatomic) NSObject* artistName;
+- (int)type;
+@end
+
+@interface AVItem : NSObject
+- (int)type;
 @end
 
 
+const char* mcast_running = "/private/var/mobile/Media/mcast_running";
 
-#import "CyDWebServer/CyDWebServer.h"
-#import "CyDWebServer/CyDWebServerFileResponse.h"
-#import "CyDWebServer/CyDWebServerDataResponse.h"
-
-static __strong CyDWebServer* _webServer;
-NSString* kVersion = @"0.1";
 static MusicNowPlayingControlsViewController* sharedMusicNowPlayingControlsViewController;
 %hook MusicNowPlayingControlsViewController
 - (id)init
@@ -759,29 +775,6 @@ static MusicNowPlayingControlsViewController* sharedMusicNowPlayingControlsViewC
 {
 	%orig;
 	sharedMusicNowPlayingControlsViewController = self;
-	if(!_webServer) {
-		_webServer = [[CyDWebServer alloc] init];
-		[_webServer addDefaultHandlerForMethod:@"GET" requestClass:objc_getClass("CyDWebServerRequest") processBlock:^CyDWebServerResponse *(CyDWebServerRequest* request) {
-			NSString* urlSt = [request.URL absoluteString];
-			NSString* fileR = nil;
-			if ([urlSt rangeOfString:@":86/Music/"].location != NSNotFound) {
-				fileR = [[@"/private/var/mobile/Media/iTunes_Control/Music/" stringByAppendingPathComponent:[[[[request.URL path] stringByDeletingLastPathComponent]lastPathComponent]stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]] stringByAppendingPathComponent:[[request.URL lastPathComponent]stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
-			}
-			if(!fileR) {
-				fileR = [request.URL path];
-			}
-			if(fileR && [[NSFileManager defaultManager] fileExistsAtPath:fileR]) {
-				return [objc_getClass("CyDWebServerFileResponse") responseWithFile:[fileR stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding] byteRange:request.byteRange];
-			}
-			return [CyDWebServerDataResponse responseWithData:[NSData data] contentType:@"data"];
-		}];
-		[_webServer startWithPort:86 bonjourName:nil];
-	} else {
-		if(!_webServer.running) {
-			[_webServer startWithPort:86 bonjourName:nil];
-		}
-	}
-	
 	
 	UIButton *mCast = nil;
 	if(!mCast) {
@@ -803,6 +796,13 @@ static MusicNowPlayingControlsViewController* sharedMusicNowPlayingControlsViewC
 - (void)popMCast
 {
 	@try {
+		
+		if (access(mcast_running, F_OK) != 0) {
+			if(open(mcast_running, O_CREAT)) {
+			}
+			usleep(1500000); //wait server start again.
+		}
+		
 		UINavigationController* navCon; 
 		if(!navCon) {
 			navCon = [[UINavigationController alloc] initWithNavigationBarClass:[UINavigationBar class] toolbarClass:[UIToolbar class]];
@@ -830,13 +830,14 @@ static MusicNowPlayingControlsViewController* sharedMusicNowPlayingControlsViewC
 						if(id artistName = [currentItem artistName]) {
 							ret[@"artistName"] = artistName;
 						}
-						if(id avItem = [currentItem avItem]) {
+						if(AVItem* avItem = (AVItem*)[currentItem avItem]) {
 							if(id asset = [avItem asset]) {
 								if(id URL = [asset URL]) {
 									ret[@"mediaURL"] = URL;
 								}
 							}
-						}
+							ret[@"mediaType"] = @([avItem type]);
+						}						
 						if(id artworkCatalog = [currentItem artworkCatalog]) {
 							if(id bestImageFromDisk = [artworkCatalog bestImageFromDisk]) {
 								if(id URL = [bestImageFromDisk artworkCatalogBackingFileURL]) {
@@ -859,5 +860,12 @@ __attribute__((constructor)) static void initialize_mcast()
 {
 	@autoreleasepool {
 		%init;
+	}
+}
+
+__attribute__((destructor)) static void finalize_mcast()
+{
+	@autoreleasepool {
+		unlink(mcast_running);
 	}
 }

@@ -1,3 +1,6 @@
+
+NSString* kVersion = @"0.1";
+
 /*
  Copyright (c) 2012-2015, Pierre-Olivier Latour
  All rights reserved.
