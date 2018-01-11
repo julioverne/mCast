@@ -1,23 +1,23 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
-#include <sys/sysctl.h>
+#import <sys/sysctl.h>
 #import <substrate.h>
 #import <CommonCrypto/CommonCrypto.h>
 
+#define NSLogn(...)
 
-@implementation NSString (mCast)
-- (NSString*)md5
+static NSString* md5String(NSString* stringSt) 
 {
-    const char* str = [self UTF8String];
-    unsigned char result[CC_MD5_DIGEST_LENGTH];
-    CC_MD5(str, strlen(str), result);
-    NSMutableString *ret = [NSMutableString stringWithCapacity:CC_MD5_DIGEST_LENGTH*2];
-    for(int i = 0; i<CC_MD5_DIGEST_LENGTH; i++) {
+	const char* str = [stringSt UTF8String];
+	unsigned char result[CC_MD5_DIGEST_LENGTH];
+	CC_MD5(str, strlen(str), result);
+	NSMutableString *ret = [NSMutableString stringWithCapacity:CC_MD5_DIGEST_LENGTH*2];
+	for(int i = 0; i<CC_MD5_DIGEST_LENGTH; i++) {
 		[ret appendFormat:@"%02x",result[i]];
-    }
-    return ret;
+	}
+	return ret;
 }
-@end
+
 
 
 enum {
@@ -36,6 +36,16 @@ enum {
 #include "ScanLAN.m"
 #include "SimplePing.m"
 #include "SimplePingHelper.m"
+
+static NSString* serverURLWithURL(NSURL* mediaURL)
+{
+	NSMutableDictionary* cachedUrls = [[[NSDictionary alloc] initWithContentsOfFile:@"/private/var/mobile/Media/mCastCache.plist"]?:@{} mutableCopy];
+	NSString* nowPlayingSt = [NSString stringWithFormat:@"%@", [mediaURL absoluteString]];
+	NSString* urlMediaMD5 = md5String(nowPlayingSt);
+	cachedUrls[urlMediaMD5] = nowPlayingSt;
+	[cachedUrls writeToFile:@"/private/var/mobile/Media/mCastCache.plist" atomically:YES];
+	return [NSString stringWithFormat:@"http://%@:86/%@", [[[ScanLAN alloc] init] localIPAddress], urlMediaMD5];
+}
 
 static const char * reqCONNECT ="\x00\x00\x00\x58\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x0A\x72\x65\x63\x65\x69\x76\x65\x72\x2D\x30\x22\x28\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x74\x70\x2E\x63\x6F\x6E\x6E\x65\x63\x74\x69\x6F\x6E\x28\x00\x32\x12""{\"type\":\"CONNECT\"}";
 static const char * reqLAUNCH ="\x00\x00\x00\x73\x08\x00\x12\x08\x73\x65\x6E\x64\x65\x72\x2D\x30\x1A\x0A\x72\x65\x63\x65\x69\x76\x65\x72\x2D\x30\x22\x23\x75\x72\x6E\x3A\x78\x2D\x63\x61\x73\x74\x3A\x63\x6F\x6D\x2E\x67\x6F\x6F\x67\x6C\x65\x2E\x63\x61\x73\x74\x2E\x72\x65\x63\x65\x69\x76\x65\x72\x28\x00\x32\x32""{\"type\":\"LAUNCH\",\"appId\":\"CC1AD845\",\"requestId\":0}";
@@ -173,6 +183,7 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 	
 	const char* baseURL =  (const char*)(malloc(83)); // max length 82
 	memset ((void *)baseURL,'?',82);
+	((char*)baseURL)[83] = 0;
 	if(urlMedia) {
 		urlMedia = [urlMedia stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
 		urlMedia = [urlMedia stringByReplacingOccurrencesOfString: @"\"" withString:@"\\\""];
@@ -181,6 +192,7 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 	
 	const char* baseArtURL =  (const char*)(malloc(266)); // max length 265
 	memset ((void *)baseArtURL,'?',265);
+	((char*)baseArtURL)[266] = 0;
 	if(urlArtMedia) {
 		urlArtMedia = [urlArtMedia stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
 		urlArtMedia = [urlArtMedia stringByReplacingOccurrencesOfString: @"\"" withString:@"\\\""];
@@ -188,21 +200,31 @@ static int startChromecastMedia(NSString* ipCastSt, NSDictionary* metadata)
 	}
 	
 	const char* baseTitle =  (const char*)(malloc(162)); // max length 161
-	memset ((void *)baseTitle,' ',161);		
+	memset ((void *)baseTitle,' ',161);
+	((char*)baseTitle)[162] = 0;
 	if(titleMedia) {
 		titleMedia = [NSString stringWithFormat:@"%@", @{@"":titleMedia}];
-		titleMedia = [titleMedia substringToIndex:[titleMedia length]-4];
-		titleMedia = [titleMedia substringFromIndex:12];
+		titleMedia = [titleMedia substringToIndex:[titleMedia length]-3];
+		titleMedia = [titleMedia substringFromIndex:11];
+		if([titleMedia hasPrefix:@"\""] && [titleMedia hasSuffix:@"\""]) {
+			titleMedia = [titleMedia substringToIndex:[titleMedia length]-1];
+			titleMedia = [titleMedia substringFromIndex:1];
+		}
 		titleMedia = [titleMedia stringByReplacingOccurrencesOfString: @"\\U" withString:@"\\u"];
 		memcpy((void*)baseTitle, titleMedia.UTF8String, titleMedia.length);
 	}
 	
 	const char* baseSubtitle =  (const char*)(malloc(165)); // max length 164
 	memset ((void *)baseSubtitle,' ',164);
+	((char*)baseSubtitle)[165] = 0;
 	if(subtitleMedia) {
 		subtitleMedia = [NSString stringWithFormat:@"%@", @{@"":subtitleMedia}];
-		subtitleMedia = [subtitleMedia substringToIndex:[subtitleMedia length]-4];
-		subtitleMedia = [subtitleMedia substringFromIndex:12];
+		subtitleMedia = [subtitleMedia substringToIndex:[subtitleMedia length]-3];
+		subtitleMedia = [subtitleMedia substringFromIndex:11];
+		if([subtitleMedia hasPrefix:@"\""] && [subtitleMedia hasSuffix:@"\""]) {
+			subtitleMedia = [subtitleMedia substringToIndex:[subtitleMedia length]-1];
+			subtitleMedia = [subtitleMedia substringFromIndex:1];
+		}
 		subtitleMedia = [subtitleMedia stringByReplacingOccurrencesOfString: @"\\U" withString:@"\\u"];
 		memcpy((void*)baseSubtitle, subtitleMedia.UTF8String, subtitleMedia.length);
 	}
@@ -314,29 +336,10 @@ static BOOL isPortOpen(const char* ip, int port)
 
 #import <Foundation/Foundation.h>
 
-@class UIProgressIndicator;
-@interface UIProgressHUD : UIView {
-    UIImageView *_doneView;
-    UIWindow *_parentWindow;
-    struct { 
-	unsigned int isShowing : 1; 
-	unsigned int isShowingText : 1; 
-	unsigned int fixedFrame : 1; 
-	unsigned int reserved : 30; 
-    } _progressHUDFlags;
-    UIProgressIndicator *_progressIndicator;
-    UILabel *_progressMessage;
-}
-- (id)_progressIndicator;
-- (void)dealloc;
-- (void)done;
+
+@interface UIProgressHUD : UIView
 - (void)hide;
-- (id)initWithWindow:(id)arg1;
-- (void)layoutSubviews;
-- (void)setFontSize:(int)arg1;
-- (void)setShowsText:(BOOL)arg1;
 - (void)setText:(id)arg1;
-- (void)show:(BOOL)arg1;
 - (void)showInView:(id)arg1;
 @end
 
@@ -543,10 +546,10 @@ static BOOL isPortOpen(const char* ip, int port)
 @end
 
 
+
 @interface mCastPlayerViewController : UITableViewController <ScanLANDelegate>
 
 @property(strong, nonatomic) NSMutableDictionary* services;
-@property(strong, nonatomic) ScanLAN * lanScanner;
 @property(strong, nonatomic) NSTimer* timer;
 @property(strong, nonatomic) NSMutableArray *connctedDevices;
 
@@ -554,7 +557,7 @@ static BOOL isPortOpen(const char* ip, int port)
 @end
 
 @implementation mCastPlayerViewController
-@synthesize services, lanScanner, timer, connctedDevices;
+@synthesize services, timer, connctedDevices;
 
 + (mCastPlayerViewController*) shared
 {
@@ -659,30 +662,17 @@ static BOOL isPortOpen(const char* ip, int port)
 						[hud setText:@"Starting..."];
 					});
 					
-					NSString* myLocalIP = [[[ScanLAN alloc] init] localIPAddress];
-					
-					NSMutableDictionary* cachedUrls = [[[NSDictionary alloc] initWithContentsOfFile:@"/private/var/mobile/Media/mCastCache.plist"]?:@{} mutableCopy];
-					
-					NSString* nowPlayingSt = [nowPlayingInfo[@"mediaURL"] absoluteString];
-					NSString* urlMediaMD5 = [[NSString stringWithFormat:@"%@", nowPlayingSt] md5];
-					cachedUrls[urlMediaMD5] = nowPlayingSt;
-					NSString* mediaURL = [NSString stringWithFormat:@"http://%@:86/%@", myLocalIP, urlMediaMD5];
-					
-					NSString* artURLPath = [nowPlayingInfo[@"artURL"] absoluteString];
-					NSString* urlArtMD5 = [[NSString stringWithFormat:@"%@", artURLPath] md5];
-					cachedUrls[urlArtMD5] = artURLPath;
-					NSString* artURL = [NSString stringWithFormat:@"http://%@:86/%@", myLocalIP, urlArtMD5];
-					
-					[cachedUrls writeToFile:@"/private/var/mobile/Media/mCastCache.plist" atomically:YES];
+					NSString* mediaURL = serverURLWithURL(nowPlayingInfo[@"mediaURL"]);
+					NSString* artURL = serverURLWithURL(nowPlayingInfo[@"artURL"]);
 					
 					NSString* subtitleSt = [[nowPlayingInfo[@"artistName"]?:@"" stringByAppendingString:@" – "]stringByAppendingString:nowPlayingInfo[@"albumName"]?:@""];
 					
 					startChromecastMedia(cachedDevice[@"ip"], @{
-						@"mediaURL":mediaURL,
+						@"mediaURL": mediaURL,
 						@"mediaType": nowPlayingInfo[@"mediaType"]?:@(1),
 						@"artURL": artURL,
 						@"titleMedia": nowPlayingInfo[@"title"]?:@"",
-						@"subtitleMedia": subtitleSt.length>5?subtitleSt:@"",
+						@"subtitleMedia": subtitleSt.length>3?subtitleSt:@"",
 					});
 				}
 				if(indexPath.section == 2 && indexPath.row == 0) {

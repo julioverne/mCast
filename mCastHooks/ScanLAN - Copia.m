@@ -21,7 +21,6 @@
 @property(strong, nonatomic) NSString *netMask;
 @property(assign, nonatomic) NSInteger baseAddressEnd;
 @property(assign, nonatomic) NSInteger timerIterationNumber;
-@property(assign, nonatomic) BOOL stopReq;
 
 @end
 
@@ -38,10 +37,11 @@
     return self;
 }
 
-- (void)startScan
-{
-	self.stopReq = NO;
+- (void)startScan {
     self.localAddress = [self localIPAddress];
+    //This is used to test on the simulator
+    //self.localAddress = @"192.168.1.8";
+    //self.netMask = @"255.255.255.0";
     NSArray *a = [self.localAddress componentsSeparatedByString:@"."];
     NSArray *b = [self.netMask componentsSeparatedByString:@"."];
     if ([self isIpAddressValid:self.localAddress] && (a.count == 4) && (b.count == 4)) {
@@ -59,37 +59,39 @@
                 self.baseAddressEnd = andInt;
             }
         }
-		[self pingAddress];
+		
+        self.timer = [NSTimer scheduledTimerWithTimeInterval:0.1f target:self selector:@selector(pingAddress) userInfo:nil repeats:YES];
     }
 }
 
-- (void)stopScan
-{
-	self.stopReq = YES;
+- (void)stopScan {
+    [self.timer invalidate];
 }
 
-- (void)pingAddress
-{
-    if (self.currentHostAddress>=254 || self.stopReq) {
-		return;
+- (void)pingAddress{
+    self.currentHostAddress++;
+    NSString *address = [NSString stringWithFormat:@"%@%d", self.baseAddress, (int)self.currentHostAddress];
+	NSLog(@"pingAddress: %@", address);
+    [SimplePingHelper ping:address target:self sel:@selector(pingResult:)];
+    if (self.currentHostAddress>=254) {
+        [self.timer invalidate];
     }
-	self.currentHostAddress++;
-	NSString *address = [NSString stringWithFormat:@"%@%d", self.baseAddress, (int)self.currentHostAddress];
-	[SimplePingHelper ping:address target:self sel:@selector(pingResult:)];
 }
-
-- (void)pingResult:(NSNumber*)success
-{
+/*
+ - (void)pingAddress:(NSString *)address{
+ [SimplePingHelper ping:address target:self sel:@selector(pingResult:)];
+ }
+ */
+- (void)pingResult:(NSNumber*)success {
+    self.timerIterationNumber++;
     if (success.boolValue) {
         NSString *deviceIPAddress = [NSString stringWithFormat:@"%@%d", self.baseAddress, (int)self.currentHostAddress];
         NSString *deviceName = [self getHostFromIPAddress:[[NSString stringWithFormat:@"%@%d", self.baseAddress, (int)self.currentHostAddress] cStringUsingEncoding:NSASCIIStringEncoding]];
         [self.delegate scanLANDidFindNewAdrress:deviceIPAddress havingHostName:deviceName];
     }
-    if (self.currentHostAddress>=254) {
+    if (self.timerIterationNumber+self.baseAddressEnd>=254) {
         [self.delegate scanLANDidFinishScanning];
-    } else {
-		[self pingAddress];
-	}
+    }
 }
 
 - (NSString *)getHostFromIPAddress:(const char*)ipAddress {
