@@ -1,4 +1,4 @@
-include theos/makefiles/common.mk
+include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = libMCastWebServer
 
@@ -15,8 +15,8 @@ libMCastWebServer_FRAMEWORKS = UIKit Foundation CoreFoundation CFNetwork MobileC
 libMCastWebServer_CFLAGS = -fno-objc-arc -std=c++11
 libMCastWebServer_LDFLAGS = -lz -Wl,-segalign,4000
 
-libMCastWebServer_ARCHS = armv7 arm64
-export ARCHS = armv7 arm64
+libMCastWebServer_ARCHS = armv7 arm64 arm64e
+export ARCHS = armv7 arm64 arm64e
 
 include $(THEOS_MAKE_PATH)/library.mk
 	
